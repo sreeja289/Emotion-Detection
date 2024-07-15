@@ -1,0 +1,119 @@
+#import libraries
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+#upload dataset of the images
+
+# Load the FER-2015 dataset
+data = pd.read_csv('fer2015.csv')
+
+# Preprocess data
+def preprocess_input(image):
+    image = np.array(image.split(), dtype='float32')
+    image = image.reshape(48, 48, 1)
+    image = image / 255.0
+    return image
+
+data['pixels'] = data['pixels'].apply(preprocess_input)
+
+# Split data
+X = np.array(data['pixels'].tolist())
+y = pd.get_dummies(data['emotion']).values
+
+from sklearn.model_selection import train_test_split
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Data augmentation
+datagen = ImageDataGenerator(
+    rotation_range=10,
+    width_shift_range=0.1,
+    height_shift_range=0.1,
+    horizontal_flip=True
+)
+
+datagen.fit(X_train)
+
+#building the model
+
+model = Sequential([
+    Conv2D(32, (3, 3), activation='relu', input_shape=(48, 48, 1)),
+    MaxPooling2D((2, 2)),
+    Dropout(0.25),
+    Conv2D(64, (3, 3), activation='relu'),
+    MaxPooling2D((2, 2)),
+    Dropout(0.25),
+    Conv2D(128, (3, 3), activation='relu'),
+    MaxPooling2D((2, 2)),
+    Dropout(0.25),
+    Flatten(),
+    Dense(256, activation='relu'),
+    Dropout(0.5),
+    Dense(7, activation='softmax')
+])
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+#training the model
+
+batch_size = 64
+epochs = 50
+
+history = model.fit(datagen.flow(X_train, y_train, batch_size=batch_size),
+                    validation_data=(X_val, y_val),
+                    steps_per_epoch=len(X_train) // batch_size,
+                    epochs=epochs)
+
+#evaluing the model
+
+y_pred = model.predict(X_val)
+y_pred_classes = np.argmax(y_pred, axis=1)
+y_true = np.argmax(y_val, axis=1)
+
+print(classification_report(y_true, y_pred_classes))
+
+conf_matrix = confusion_matrix(y_true, y_pred_classes)
+plt.figure(figsize=(10, 8))
+sns.heatmap(conf_matrix, annot=True, fmt='d')
+plt.show()
+
+
+#for eal-time detection
+#for web cam
+
+from flask import Flask, render_template, request
+from tensorflow.keras.preprocessing.image import img_to_array
+from tensorflow.keras.models import load_model
+import numpy as np
+import cv2
+
+app = Flask(__name__)
+model = load_model('emotion_detection_model.h5')
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        file = request.files['image']
+        image = cv2.imdecode(np.fromstring(file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+        image = cv2.resize(image, (48, 48))
+        image = img_to_array(image)
+        image = np.expand_dims(image, axis=0)
+        image = image / 255.0
+
+        prediction = model.predict(image)
+        emotion = np.argmax(prediction)
+        emotions = ['Angry', 'Disgust', 'Fear', 'Happy', 'Sad', 'Surprise', 'Neutral']
+        emotion_label = emotions[emotion]
+
+        return render_template('index.html', emotion=emotion_label)
+    return render_template('index.html')
+
+if __name__ == '__main__':
+    app.run()
+
